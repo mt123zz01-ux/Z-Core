@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "z-core",
+  "version": "${version}",
+  "name": "Z-Core",
+  "description": "Z-Core Addon for Meteor Client",
+  "authors": ["YourName"],
+  "contact": {},
+  "license": "MIT",
+
+  "environment": "client",
+
+  "entrypoints": {
+    "meteor": [
+      "dev.zcore.ZCore"
+    ]
+  },
+
+  "mixins": [
+    "z-core.mixins.json"
+  ],
+
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "${minecraft_version}",
+    "meteor-client": "*"
+  }
+}

@@ -1,0 +1,9 @@
+# libs folder
+
+Place these jar files here before building if they are missing:
+
+- meteor-client-1.21.11-*.jar
+- baritone or baritone-api-fabric compatible with Minecraft 1.21.11
+- orbit-0.2.4.jar
+
+Do not commit private/local jars to git.

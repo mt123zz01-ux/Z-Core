@@ -1,0 +1,174 @@
+plugins {
+    id 'fabric-loom' version '1.14.10'
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+    maven { url 'https://maven.meteordev.org/releases' }
+    maven { url 'https://maven.meteordev.org/snapshots' }
+}
+
+loom {
+    // Add local Meteor and Baritone jars from libs
+    runs {
+        client {
+            vmArgs '-Dmixin.debug.export=true'
+        }
+    }
+}
+
+dependencies {
+    // Minecraft + Fabric
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+    // Fabric API from Maven
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // Meteor Client from libs/ (meteor-client-*.jar)
+    modCompileOnly fileTree(dir: 'libs', include: ['meteor-client*.jar'])
+
+    // Orbit EventBus - Meteor 1.21.11 packages Orbit as a nested runtime jar,
+    // but javac/Gradle does not automatically add that nested jar to the compile classpath.
+    // libs/orbit-0.2.4.jar was extracted from meteor-client-1.21.11-63.jar.
+    compileOnly fileTree(dir: 'libs', include: ['orbit*.jar'])
+
+    // Baritone from libs/ (baritone-api-fabric-*.jar or baritone-meteor-*.jar)
+    modCompileOnly fileTree(dir: 'libs', include: ['baritone*.jar'])
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', project.minecraft_version
+    inputs.property 'loader_version', project.loader_version
+
+    filteringCharset 'UTF-8'
+
+    filesMatching('fabric.mod.json') {
+        expand(
+            'version'          : project.version,
+            'minecraft_version': project.minecraft_version,
+            'loader_version'   : project.loader_version
+        )
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+
+def jarContains = { File jar, String entry ->
+    new java.util.zip.ZipFile(jar).withCloseable { zip -> zip.getEntry(entry) != null }
+}
+
+// Validate local libs before building
+tasks.register('checkLibs') {
+    doFirst {
+        def meteorJar = fileTree(dir: 'libs', include: ['meteor-client*.jar']).files
+        def bariJar   = fileTree(dir: 'libs', include: ['baritone*.jar']).files
+        def orbitJar  = fileTree(dir: 'libs', include: ['orbit*.jar']).files
+        def mcVersion = project.minecraft_version
+
+        if (meteorJar.isEmpty()) {
+            throw new GradleException(
+                "\n========================================\n" +
+                "  MISSING: meteor-client-${mcVersion}-*.jar in libs/\n" +
+                "  Copy the correct Meteor Client jar for Minecraft ${mcVersion}.\n" +
+                "========================================"
+            )
+        }
+
+        def wrongMeteor = meteorJar.findAll { !it.name.contains(mcVersion) }
+        if (!wrongMeteor.isEmpty()) {
+            throw new GradleException(
+                "\n========================================\n" +
+                "  WRONG METEOR CLIENT VERSION!\n" +
+                "  Project is configured for Minecraft ${mcVersion}\n" +
+                "  Mismatched jars: ${wrongMeteor*.name}\n" +
+                "  Remove old jars and use meteor-client-${mcVersion}-*.jar\n" +
+                "========================================"
+            )
+        }
+
+        if (orbitJar.isEmpty()) {
+            throw new GradleException(
+                "\n========================================\n" +
+                "  MISSING: orbit-*.jar in libs/\n" +
+                "  Meteor modules require meteordevelopment.orbit.EventHandler at compile time.\n" +
+                "  This zip includes orbit-0.2.4.jar; do not delete it.\n" +
+                "========================================"
+            )
+        }
+
+        if (bariJar.isEmpty()) {
+            throw new GradleException(
+                "\n========================================\n" +
+                "  MISSING: baritone or baritone-api-fabric jar in libs/\n" +
+                "  Copy a Minecraft ${mcVersion} compatible Baritone jar before building.\n" +
+                "========================================"
+            )
+        }
+
+        def wrongBaritone = bariJar.findAll { !it.name.contains(mcVersion) }
+        if (!wrongBaritone.isEmpty()) {
+            throw new GradleException(
+                "\n========================================\n" +
+                "  WRONG BARITONE VERSION!\n" +
+                "  Project is configured for Minecraft ${mcVersion}\n" +
+                "  Mismatched jars: ${wrongBaritone*.name}\n" +
+                "  Use a baritone/baritone-meteor jar compatible with ${mcVersion}\n" +
+                "========================================"
+            )
+        }
+
+        if (!meteorJar.any { jarContains(it, 'meteordevelopment/meteorclient/addons/MeteorAddon.class') }) {
+            throw new GradleException("Meteor jar does not contain MeteorAddon.class; the meteor-client jar in libs/ may be wrong or corrupted.")
+        }
+
+        if (!orbitJar.any { jarContains(it, 'meteordevelopment/orbit/EventHandler.class') }) {
+            throw new GradleException("Orbit jar does not contain EventHandler.class; keep the correct libs/orbit-0.2.4.jar.")
+        }
+
+        if (!bariJar.any { jarContains(it, 'baritone/api/BaritoneAPI.class') && jarContains(it, 'baritone/api/pathing/goals/GoalBlock.class') }) {
+            throw new GradleException("Baritone jar does not contain BaritoneAPI/GoalBlock; use baritone-meteor-${mcVersion}.jar or a compatible baritone-api-fabric jar.")
+        }
+
+        println "✅ Minecraft target: ${mcVersion}"
+        println "OK Found correct Meteor version: ${meteorJar*.name}"
+        println "OK Found Orbit: ${orbitJar*.name}"
+        println "OK Found Baritone: ${bariJar*.name}"
+    }
+}
+
+tasks.named('build') { dependsOn('checkLibs') }
+tasks.named('compileJava') { dependsOn('checkLibs') }
+
+// Print reminder after build
+tasks.register('remindLibs') {
+    doLast {
+        println "\n========================================"
+        println "  Build complete. Copy these files into mods/:"
+        println "  - meteor-client-${project.minecraft_version}-*.jar"
+        println "  - baritone / baritone-api-fabric compatible with Minecraft ${project.minecraft_version}"
+        println "  - z-core-*.jar  (the jar that was just built)"
+        println "========================================"
+    }
+}
+tasks.named('build') { finalizedBy('remindLibs') }
